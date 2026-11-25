@@ -30,7 +30,7 @@
 
 # Check whether a command exists - returns 0 if it does, 1 if it does not
 exists() {
-  if command -v $1 >/dev/null 2>&1
+  if command -v "$1" >/dev/null 2>&1
   then
     return 0
   else
@@ -42,7 +42,7 @@ exists() {
 report_bug() {
   echo "Version: $version"
   echo ""
-  echo "Please file a Bug Report at https://gitlab.com/cinc-project/mixlib-install/issues"
+  echo "Please file a Bug Report at https://gitlab.com/cinc-project/distribution/mixlib-install/-/issues"
   echo "Alternatively, feel free to open a Support Ticket at https://gitlab.com/groups/cinc-project/-/issues"
   echo "More Cinc support resources can be found at https://www.cinc.sh/support"
   echo ""
@@ -62,11 +62,11 @@ unable_to_retrieve_package() {
   echo "Unable to retrieve a valid package!"
   report_bug
   echo "Metadata URL: $metadata_url"
-  if test "x$download_url" != "x"; then
+  if [ -n "$download_url" ]; then
     echo "Download URL: $download_url"
   fi
-  if test "x$stderr_results" != "x"; then
-    echo "\nDEBUG OUTPUT FOLLOWS:\n$stderr_results"
+  if [ -n "$stderr_results" ]; then
+    printf '\nDEBUG OUTPUT FOLLOWS:\n%s\n' "$stderr_results"
   fi
   exit 1
 }
@@ -94,38 +94,48 @@ http_404_error() {
   echo ""
   # deliberately do not call report_bug to suppress bug report noise.
   echo "Metadata URL: $metadata_url"
-  if test "x$download_url" != "x"; then
+  if [ -n "$download_url" ]; then
     echo "Download URL: $download_url"
   fi
-  if test "x$stderr_results" != "x"; then
-    echo "\nDEBUG OUTPUT FOLLOWS:\n$stderr_results"
+  if [ -n "$stderr_results" ]; then
+    printf '\nDEBUG OUTPUT FOLLOWS:\n%s\n' "$stderr_results"
   fi
   exit 1
 }
 
 capture_tmp_stderr() {
   # spool up /tmp/stderr from all the commands we called
-  if test -f "$tmp_dir/stderr"; then
-    output=`cat $tmp_dir/stderr`
+  if [ -f "$tmp_dir/stderr" ]; then
+    output=`cat "$tmp_dir"/stderr`
     stderr_results="${stderr_results}\nSTDERR from $1:\n\n$output\n"
-    rm $tmp_dir/stderr
+    rm "$tmp_dir"/stderr
   fi
 }
 
 # do_wget URL FILENAME
 do_wget() {
   echo "trying wget..."
-  wget --user-agent="User-Agent: mixlib-install/3.12.30" -O "$2" "$1" 2>$tmp_dir/stderr
+  # If filename is empty, use --content-disposition to get filename from server
+  if [ -z "$2" ]; then
+    wget --user-agent="User-Agent: mixlib-install/4.1.2" --content-disposition "$1" 2>"$tmp_dir"/stderr
+  else
+    wget --user-agent="User-Agent: mixlib-install/4.1.2" -O "$2" "$1" 2>"$tmp_dir"/stderr
+  fi
   rc=$?
   # check for 404
-  grep "ERROR 404" $tmp_dir/stderr 2>&1 >/dev/null
-  if test $? -eq 0; then
+  if grep "ERROR 404" "$tmp_dir"/stderr >/dev/null 2>&1; then
     echo "ERROR 404"
     http_404_error
   fi
 
-  # check for bad return status or empty output
-  if test $rc -ne 0 || test ! -s "$2"; then
+  # check for bad return status (skip empty output check if using content-disposition)
+  if [ $rc -ne 0 ]; then
+    capture_tmp_stderr "wget"
+    return 1
+  fi
+
+  # Only check for empty output if we specified a filename
+  if [ -n "$2" ] && [ ! -s "$2" ]; then
     capture_tmp_stderr "wget"
     return 1
   fi
@@ -136,17 +146,29 @@ do_wget() {
 # do_curl URL FILENAME
 do_curl() {
   echo "trying curl..."
-  curl -A "User-Agent: mixlib-install/3.12.30" --retry 5 -sL -D $tmp_dir/stderr "$1" > "$2"
-  rc=$?
-  # check for 404
-  grep "404 Not Found" $tmp_dir/stderr 2>&1 >/dev/null
-  if test $? -eq 0; then
+  # If filename is empty, use -O and -J to get filename from Content-Disposition header
+  if [ -z "$2" ]; then
+    curl -A "User-Agent: mixlib-install/4.1.2" --retry 5 -sL --fail -D "$tmp_dir"/stderr -O -J "$1"
+    rc=$?
+  else
+    curl -A "User-Agent: mixlib-install/4.1.2" --retry 5 -sL --fail -D "$tmp_dir"/stderr "$1" > "$2"
+    rc=$?
+  fi
+
+  # check for 404 (matches both HTTP/1.1 "404 Not Found" and HTTP/2 "404")
+  if grep "404" "$tmp_dir"/stderr >/dev/null 2>&1; then
     echo "ERROR 404"
     http_404_error
   fi
 
-  # check for bad return status or empty output
-  if test $rc -ne 0 || test ! -s "$2"; then
+  # check for bad return status
+  if [ $rc -ne 0 ]; then
+    capture_tmp_stderr "curl"
+    return 1
+  fi
+
+  # Only check for empty output if we specified a filename
+  if [ -n "$2" ] && [ ! -s "$2" ]; then
     capture_tmp_stderr "curl"
     return 1
   fi
@@ -157,26 +179,29 @@ do_curl() {
 # do_fetch URL FILENAME
 do_fetch() {
   echo "trying fetch..."
-  fetch --user-agent="User-Agent: mixlib-install/3.12.30" -o "$2" "$1" 2>$tmp_dir/stderr
+  fetch --user-agent="User-Agent: mixlib-install/4.1.2" -o "$2" "$1" 2>"$tmp_dir"/stderr
   # check for bad return status
-  test $? -ne 0 && return 1
+  [ $? -ne 0 ] && return 1
   return 0
 }
 
 # do_perl URL FILENAME
 do_perl() {
   echo "trying perl..."
-  perl -e 'use LWP::Simple; getprint($ARGV[0]);' "$1" > "$2" 2>$tmp_dir/stderr
+  perl -e 'use LWP::Simple; getprint($ARGV[0]);' "$1" > "$2" 2>"$tmp_dir"/stderr
   rc=$?
-  # check for 404
-  grep "404 Not Found" $tmp_dir/stderr 2>&1 >/dev/null
-  if test $? -eq 0; then
-    echo "ERROR 404"
-    http_404_error
+  # check for HTTP error status codes (4xx/5xx)
+  if grep "^[45][0-9][0-9] " "$tmp_dir"/stderr >/dev/null 2>&1; then
+    if grep "404 Not Found" "$tmp_dir"/stderr >/dev/null 2>&1; then
+      echo "ERROR 404"
+      http_404_error
+    fi
+    capture_tmp_stderr "perl"
+    return 1
   fi
 
   # check for bad return status or empty output
-  if test $rc -ne 0 || test ! -s "$2"; then
+  if [ $rc -ne 0 ] || [ ! -s "$2" ]; then
     capture_tmp_stderr "perl"
     return 1
   fi
@@ -187,17 +212,16 @@ do_perl() {
 # do_python URL FILENAME
 do_python() {
   echo "trying python..."
-  python -c "import sys,urllib2; sys.stdout.write(urllib2.urlopen(urllib2.Request(sys.argv[1], headers={ 'User-Agent': 'mixlib-install/3.12.30' })).read())" "$1" > "$2" 2>$tmp_dir/stderr
+  python -c "import sys,urllib2; sys.stdout.write(urllib2.urlopen(urllib2.Request(sys.argv[1], headers={ 'User-Agent': 'mixlib-install/4.1.2' })).read())" "$1" > "$2" 2>"$tmp_dir"/stderr
   rc=$?
   # check for 404
-  grep "HTTP Error 404" $tmp_dir/stderr 2>&1 >/dev/null
-  if test $? -eq 0; then
+  if grep "HTTP Error 404" "$tmp_dir"/stderr >/dev/null 2>&1; then
     echo "ERROR 404"
     http_404_error
   fi
 
   # check for bad return status or empty output
-  if test $rc -ne 0 || test ! -s "$2"; then
+  if [ $rc -ne 0 ] || [ ! -s "$2" ]; then
     capture_tmp_stderr "python"
     return 1
   fi
@@ -208,12 +232,14 @@ do_python() {
 do_checksum() {
   if exists sha256sum; then
     echo "Comparing checksum with sha256sum..."
-    checksum=`sha256sum $1 | awk '{ print $1 }'`
-    return `test "x$checksum" = "x$2"`
+    checksum=`sha256sum "$1" | awk '{ print $1 }'`
+    [ "$checksum" = "$2" ]
+    return $?
   elif exists shasum; then
     echo "Comparing checksum with shasum..."
-    checksum=`shasum -a 256 $1 | awk '{ print $1 }'`
-    return `test "x$checksum" = "x$2"`
+    checksum=`shasum -a 256 "$1" | awk '{ print $1 }'`
+    [ "$checksum" = "$2" ]
+    return $?
   else
     echo "WARNING: could not find a valid checksum program, pre-install shasum or sha256sum in your O/S image to get validation..."
     return 0
@@ -225,11 +251,11 @@ do_download() {
   echo "downloading $1"
   echo "  to file $2"
 
-  url=`echo $1`
-  if test "x$platform" = "xsolaris2"; then
-    if test "x$platform_version" = "x5.9" -o "x$platform_version" = "x5.10"; then
+  url="$1"
+  if [ "$platform" = "solaris2" ]; then
+    if [ "$platform_version" = "5.9" ] || [ "$platform_version" = "5.10" ]; then
       # solaris 9 lacks openssl, solaris 10 lacks recent enough credentials - your base O/S is completely insecure, please upgrade
-      url=`echo $url | sed -e 's/https/http/'`
+      url=`echo "$url" | sed -e 's/https/http/'`
     fi
   fi
 
@@ -237,23 +263,23 @@ do_download() {
   # perl, in particular may be present but LWP::Simple may not be installed
 
   if exists wget; then
-    do_wget $url $2 && return 0
+    do_wget "$url" "$2" && return 0
   fi
 
   if exists curl; then
-    do_curl $url $2 && return 0
+    do_curl "$url" "$2" && return 0
   fi
 
   if exists fetch; then
-    do_fetch $url $2 && return 0
+    do_fetch "$url" "$2" && return 0
   fi
 
   if exists perl; then
-    do_perl $url $2 && return 0
+    do_perl "$url" "$2" && return 0
   fi
 
   if exists python; then
-    do_python $url $2 && return 0
+    do_python "$url" "$2" && return 0
   fi
 
   unable_to_retrieve_package
@@ -265,7 +291,7 @@ install_file() {
   echo "Installing $project $version"
   case "$1" in
     "rpm")
-      if test "x$platform" = "xnexus" || test "x$platform" = "xios_xr"; then
+      if [ "$platform" = "nexus" ] || [ "$platform" = "ios_xr" ]; then
         echo "installing with yum..."
         yum install -yv "$2"
       else
@@ -283,11 +309,11 @@ install_file() {
       ;;
     "solaris")
       echo "installing with pkgadd..."
-      echo "conflict=nocheck" > $tmp_dir/nocheck
-      echo "action=nocheck" >> $tmp_dir/nocheck
-      echo "mail=" >> $tmp_dir/nocheck
-      pkgrm -a $tmp_dir/nocheck -n $project >/dev/null 2>&1 || true
-      pkgadd -G -n -d "$2" -a $tmp_dir/nocheck $project
+      echo "conflict=nocheck" > "$tmp_dir"/nocheck
+      echo "action=nocheck" >> "$tmp_dir"/nocheck
+      echo "mail=" >> "$tmp_dir"/nocheck
+      pkgrm -a "$tmp_dir"/nocheck -n "$project" >/dev/null 2>&1 || true
+      pkgadd -G -n -d "$2" -a "$tmp_dir"/nocheck "$project"
       ;;
     "pkg")
       echo "installing with installer..."
@@ -297,7 +323,7 @@ install_file() {
       echo "installing dmg file..."
       hdiutil detach "/Volumes/cinc_project" >/dev/null 2>&1 || true
       hdiutil attach "$2" -mountpoint "/Volumes/cinc_project"
-      cd / && /usr/sbin/installer -pkg `find "/Volumes/cinc_project" -name \*.pkg` -target /
+      cd / && /usr/sbin/installer -pkg "`find "/Volumes/cinc_project" -name \*.pkg`" -target /
       hdiutil detach "/Volumes/cinc_project"
       ;;
     "sh" )
@@ -306,7 +332,7 @@ install_file() {
       ;;
     "p5p" )
       echo "installing p5p package..."
-      pkg install -g "$2" $project
+      pkg install -g "$2" "$project"
       ;;
     *)
       echo "Unknown filetype: $1"
@@ -314,21 +340,21 @@ install_file() {
       exit 1
       ;;
   esac
-  if test $? -ne 0; then
+  if [ $? -ne 0 ]; then
     echo "Installation failed"
     report_bug
     exit 1
   fi
 }
 
-if test "x$TMPDIR" = "x"; then
+if [ -z "$TMPDIR" ]; then
   tmp="/tmp"
 else
   tmp=$TMPDIR
 fi
 # secure-ish temp dir creation without having mktemp available (DDoS-able but not exploitable)
 tmp_dir="$tmp/install.sh.$$"
-(umask 077 && mkdir $tmp_dir) || exit 1
+(umask 077 && mkdir "$tmp_dir") || exit 1
 
 ############
 # end of helpers.sh
@@ -355,11 +381,12 @@ tmp_dir="$tmp/install.sh.$$"
 channel="stable"
 project="cinc"
 
-while getopts pnv:c:f:P:d:s:l:a opt
+while getopts pnv:b:c:f:P:d:s:l:a: opt
 do
   case "$opt" in
 
     v)  version="$OPTARG";;
+    b)  base_api_url="$OPTARG";;
     c)  channel="$OPTARG";;
     p)  channel="current";; # compat for prerelease option
     n)  channel="current";; # compat for nightlies option
@@ -371,20 +398,25 @@ do
     a)  checksum="$OPTARG";;
     \?)   # unknown flag
       echo >&2 \
-      "usage: $0 [-P project] [-c release_channel] [-v version] [-f filename | -d download_dir] [-s install_strategy] [-l download_url_override] [-a checksum]"
+      "usage: $0 [-P project] [-b base_api_url] [-c release_channel] [-v version] [-f filename | -d download_dir] [-s install_strategy] [-l download_url_override] [-a checksum]"
       exit 1;;
   esac
 done
 
-shift `expr $OPTIND - 1`
+shift "`expr $OPTIND - 1`"
 
 
-if test -d "/opt/$project" && test "x$install_strategy" = "xonce"; then
-  echo "$project installation detected"
-  echo "install_strategy set to 'once'"
-  echo "Nothing to install"
-  exit
-fi
+# Check for product installation in various locations
+install_paths="/opt/$project/bin"
+
+for path in $install_paths; do
+  if [ -d "$path" ] && [ "$install_strategy" = "once" ]; then
+    echo "$project installation detected at $path"
+    echo "install_strategy set to 'once'"
+    echo "Nothing to install"
+    exit
+  fi
+done
 
 
 # platform_detection.sh
@@ -414,35 +446,35 @@ fi
 machine=`uname -m`
 os=`uname -s`
 
-if test -f "/etc/lsb-release" && grep DISTRIB_ID /etc/lsb-release >/dev/null && ! grep wrlinux /etc/lsb-release >/dev/null; then
-  platform=`grep DISTRIB_ID /etc/lsb-release | cut -d "=" -f 2 | tr '[A-Z]' '[a-z]'`
+if [ -f "/etc/lsb-release" ] && grep DISTRIB_ID /etc/lsb-release >/dev/null && ! grep wrlinux /etc/lsb-release >/dev/null; then
+  platform=`grep DISTRIB_ID /etc/lsb-release | cut -d "=" -f 2 | tr 'A-Z' 'a-z'`
   platform_version=`grep DISTRIB_RELEASE /etc/lsb-release | cut -d "=" -f 2`
 
-  if test "$platform" = "\"cumulus linux\""; then
+  if [ "$platform" = '"cumulus linux"' ]; then
     platform="cumulus_linux"
-  elif test "$platform" = "\"cumulus networks\""; then
+  elif [ "$platform" = '"cumulus networks"' ]; then
     platform="cumulus_networks"
   fi
 
-elif test -f "/etc/debian_version"; then
+elif [ -f "/etc/debian_version" ]; then
   platform="debian"
   platform_version=`cat /etc/debian_version`
-elif test -f "/etc/Eos-release"; then
+elif [ -f "/etc/Eos-release" ]; then
   # EOS may also contain /etc/redhat-release so this check must come first.
   platform=arista_eos
   platform_version=`awk '{print $4}' /etc/Eos-release`
   machine="i386"
-elif test -f "/etc/redhat-release"; then
-  platform=`sed 's/^\(.\+\) release.*/\1/' /etc/redhat-release | tr '[A-Z]' '[a-z]'`
+elif [ -f "/etc/redhat-release" ]; then
+  platform=`sed 's/^\(.\+\) release.*/\1/' /etc/redhat-release | tr 'A-Z' 'a-z'`
   platform_version=`sed 's/^.\+ release \([.0-9]\+\).*/\1/' /etc/redhat-release`
-  
-  if test "$platform" = "rocky linux"; then
-  	source /etc/os-release
+
+  if [ "$platform" = "rocky linux" ]; then
+    . /etc/os-release
  	os="${REDHAT_SUPPORT_PRODUCT}"
   	platform_version="${ROCKY_SUPPORT_PRODUCT_VERSION}"
         platform=$ID
 
-  elif test "$platform" = "xenserver"; then
+  elif [ "$platform" = "xenserver" ]; then
     # Current XenServer 6.2 is based on CentOS 5, platform is not reset to "el" server should handle response
     platform="xenserver"
   else
@@ -450,9 +482,9 @@ elif test -f "/etc/redhat-release"; then
     platform="el"
   fi
 
-elif test -f "/etc/system-release"; then
-  platform=`sed 's/^\(.\+\) release.\+/\1/' /etc/system-release | tr '[A-Z]' '[a-z]'`
-  platform_version=`sed 's/^.\+ release \([.0-9]\+\).*/\1/' /etc/system-release | tr '[A-Z]' '[a-z]'`
+elif [ -f "/etc/system-release" ]; then
+  platform=`sed 's/^\(.\+\) release.\+/\1/' /etc/system-release | tr 'A-Z' 'a-z'`
+  platform_version=`sed 's/^.\+ release \([.0-9]\+\).*/\1/' /etc/system-release | tr 'A-Z' 'a-z'`
   case $platform in amazon*) # sh compat method of checking for a substring
     . /etc/os-release
     platform_version=$VERSION_ID
@@ -460,7 +492,6 @@ elif test -f "/etc/system-release"; then
     case $platform_version in
       "2022"|"2023")
         platform="amazon"
-        platform_version=$platform_version
       ;;
       "2")
         platform="el"
@@ -477,11 +508,11 @@ elif test -f "/etc/system-release"; then
 
 
 # Apple macOS
-elif test -f "/usr/bin/sw_vers"; then
+elif [ -f "/usr/bin/sw_vers" ]; then
   platform="mac_os_x"
   # Matching the tab-space with sed is error-prone
   platform_version=`sw_vers | awk '/^ProductVersion:/ { print $2 }' | cut -d. -f1,2`
-elif test -f "/etc/release"; then
+elif [ -f "/etc/release" ]; then
   machine=`/usr/bin/uname -p`
   if grep SmartOS /etc/release >/dev/null; then
     platform="smartos"
@@ -490,7 +521,7 @@ elif test -f "/etc/release"; then
     platform="solaris2"
     platform_version=`/usr/bin/uname -r`
   fi
-elif test -f "/etc/SuSE-release"; then
+elif [ -f "/etc/SuSE-release" ]; then
   if grep 'Enterprise' /etc/SuSE-release >/dev/null;
   then
       platform="sles"
@@ -499,31 +530,31 @@ elif test -f "/etc/SuSE-release"; then
       platform="opensuseleap"
       platform_version=`awk '/^VERSION =/ { print $3 }' /etc/SuSE-release`
   fi
-elif test "x$os" = "xFreeBSD"; then
+elif [ "$os" = "FreeBSD" ]; then
   platform="freebsd"
   platform_version=`uname -r | sed 's/-.*//'`
-elif test "x$os" = "xAIX"; then
+elif [ "$os" = "AIX" ]; then
   platform="aix"
   platform_version="`uname -v`.`uname -r`"
   machine="powerpc"
-elif test -f "/etc/os-release"; then
+elif [ -f "/etc/os-release" ]; then
   . /etc/os-release
-  if test "x$CISCO_RELEASE_INFO" != "x"; then
-    . $CISCO_RELEASE_INFO
+  if [ -n "$CISCO_RELEASE_INFO" ]; then
+    . "$CISCO_RELEASE_INFO"
   fi
 
   platform=$ID
 
   # VERSION_ID is always the preferred variable to use, but not
   # every distro has it so fallback to VERSION
-  if test "x$VERSION_ID" != "x"; then
+  if [ -n "$VERSION_ID" ]; then
     platform_version=$VERSION_ID
   else
     platform_version=$VERSION
   fi
 fi
 
-if test "x$platform" = "x"; then
+if [ -z "$platform" ]; then
   echo "Unable to determine platform version!"
   report_bug
   exit 1
@@ -539,15 +570,18 @@ fi
 #   now the complete responsibility of the server-side endpoints
 #
 
-major_version=`echo $platform_version | cut -d. -f1`
+major_version=`echo "$platform_version" | cut -d. -f1`
 case $platform in
   # FIXME: should remove this case statement completely
   "el")
     # FIXME:  "el" is deprecated, should use "redhat"
     platform_version=$major_version
     ;;
+  "rocky")
+    platform_version=$major_version
+    ;;
   "debian")
-    if test "x$major_version" = "x5"; then
+    if [ "$major_version" = "5" ]; then
       # This is here for potential back-compat.
       # We do not have 5 in versions we publish for anymore but we
       # might have it for earlier versions.
@@ -583,13 +617,20 @@ case $machine in
     ;;
 esac
 
-if test "x$platform_version" = "x"; then
+# AlmaLinux 10 ships a separate x86-64-v2 package set for older CPUs.
+# `uname -m` reports x86_64 on both variants, so key off the marker file
+# that only the x86_64_v2 build of almalinux-release installs.
+if [ "$machine" = "x86_64" ] && [ -f "/etc/rpm/macros.x86_64_v2" ]; then
+  machine="x86_64_v2"
+fi
+
+if [ -z "$platform_version" ]; then
   echo "Unable to determine platform version!"
   report_bug
   exit 1
 fi
 
-if test "x$platform" = "xsolaris2"; then
+if [ "$platform" = "solaris2" ]; then
   # hack up the path on Solaris to find wget, pkgadd
   PATH=/usr/sfw/bin:/usr/sbin:$PATH
   export PATH
@@ -607,34 +648,30 @@ echo "$platform $platform_version $machine"
 # Otherwise, default proxy env vars will be loaded by the respective
 # download utility.
 
-if test "x$https_proxy" != "x"; then
+if [ -n "$https_proxy" ]; then
   echo "setting https_proxy: $https_proxy"
   HTTPS_PROXY=$https_proxy
-  https_proxy=$https_proxy
   export HTTPS_PROXY
   export https_proxy
 fi
 
-if test "x$http_proxy" != "x"; then
+if [ -n "$http_proxy" ]; then
   echo "setting http_proxy: $http_proxy"
   HTTP_PROXY=$http_proxy
-  http_proxy=$http_proxy
   export HTTP_PROXY
   export http_proxy
 fi
 
-if test "x$ftp_proxy" != "x"; then
+if [ -n "$ftp_proxy" ]; then
   echo "setting ftp_proxy: $ftp_proxy"
   FTP_PROXY=$ftp_proxy
-  ftp_proxy=$ftp_proxy
   export FTP_PROXY
   export ftp_proxy
 fi
 
-if test "x$no_proxy" != "x"; then
+if [ -n "$no_proxy" ]; then
   echo "setting no_proxy: $no_proxy"
   NO_PROXY=$no_proxy
-  no_proxy=$no_proxy
   export NO_PROXY
   export no_proxy
 fi
@@ -645,7 +682,15 @@ fi
 # This section calls omnitruck to get the information about the build to be
 #   installed.
 #
+#  EXAMPLE
+#    curl -L 'https://omnitruck.cinc.sh/install.sh' | sudo bash -s --  -P cinc -c stable
+#
+# Gets the download url and SHA256 checksum for the latest stable release of Cinc Workstation.
+#   EXAMPLE
+#     curl -L 'https://omnitruck.cinc.sh/install.sh' | sudo bash -s --  -P cinc-workstation -c stable
+#
 # Inputs:
+# $base_api_url:
 # $channel:
 # $project:
 # $version:
@@ -659,32 +704,43 @@ fi
 # $sha256:
 ############
 
-if test "x$download_url_override" = "x"; then
+if [ -z "$download_url_override" ]; then
   echo "Getting information for $project $channel $version for $platform..."
 
   metadata_filename="$tmp_dir/metadata.txt"
-  metadata_url="https://omnitruck.cinc.sh/$channel/$project/metadata?v=$version&p=$platform&pv=$platform_version&m=$machine"
-  blob_url="ghcr.io/rmoriz/cinc-mirror/$project@sha256"
-  do_download "$metadata_url"  "$metadata_filename"
+
+  # Set base_api_url from option if not already set via CLI parameter
+  if [ -z "$base_api_url" ]; then
+    base_api_url="https://omnitruck.cinc.sh"
+  fi
+
+
+  if [ -z "$base_api_url" ]; then
+    base_api_url="https://omnitruck.cinc.sh"
+  fi
+
+  metadata_url="$base_api_url/$channel/$project/metadata?v=$version&p=$platform&pv=$platform_version&m=$machine"
+
+  do_download "$metadata_url" "$metadata_filename"
 
   cat "$metadata_filename"
 
   echo ""
-  # check that all the mandatory fields in the downloaded metadata are there
-  if grep '^url' $metadata_filename > /dev/null && grep '^sha256' $metadata_filename > /dev/null; then
+
+  # Parse text response from omnitruck
+  if grep '^url' "$metadata_filename" > /dev/null && grep '^sha256' "$metadata_filename" > /dev/null; then
     echo "downloaded metadata file looks valid..."
+    download_url=`awk '$1 == "url" { print $2 }' "$metadata_filename"`
+    sha256=`awk '$1 == "sha256" { print $2 }' "$metadata_filename"`
+    if [ -z "$version" ]; then
+      version=`awk '$1 == "version" { print $2 }' "$metadata_filename"`
+    fi
   else
     echo "downloaded metadata file is corrupted or an uncaught error was encountered in downloading the file..."
     # this generally means one of the download methods downloaded a 404 or something like that and then reported a successful exit code,
     # and this should be fixed in the function that was doing the download.
     report_bug
     exit 1
-  fi
-
-  download_url=`awk '$1 == "url" { print $2 }' "$metadata_filename"`
-  sha256=`awk '$1 == "sha256" { print $2 }' "$metadata_filename"`
-  if test "x$version" = "x"; then
-    version=`awk '$1 == "version" { print $2 }' "$metadata_filename"`
   fi
 else
   download_url=$download_url_override
@@ -699,10 +755,12 @@ fi
 
 # fetch_package.sh
 ############
-# This section fetches a package from GHCR using blob SHA256 and verifies its metadata.
+# This section fetches a package from the CINC mirror at ghcr.io first and
+# falls back to the upstream $download_url when the mirror cannot serve it.
 #
 # Inputs:
-# $sha256: SHA256 hash from metadata
+# $download_url: Upstream URL from metadata, used as the fallback.
+# $sha256: SHA256 from metadata, used to address the GHCR blob.
 # $tmp_dir:
 # Optional Inputs:
 # $cmdline_filename: Name of the package downloaded on local disk.
@@ -713,49 +771,34 @@ fi
 # $filetype: Type of the file downloaded.
 ############
 
-# Determine filetype from the original download URL
-if test "x$download_url_override" != "x"; then
-  # For URL override, try to determine from the URL
-  case "$download_url_override" in
-    *.deb) filetype="deb" ;;
-    *.rpm) filetype="rpm" ;;
-    *.dmg) filetype="dmg" ;;
-    *.pkg) filetype="pkg" ;;
-    *) 
-      # Fallback to platform-based detection
-      case "$platform" in
-        "ubuntu"|"debian") filetype="deb" ;;
-        "el"|"centos"|"rhel"|"fedora"|"rocky"|"amazon") filetype="rpm" ;;
-        "mac_os_x") filetype="dmg" ;;
-        *) filetype="deb" ;;
-      esac
-      ;;
-  esac
+# Determine filetype from the original download URL in metadata.
+if [ -n "$download_url_override" ]; then
+  filetype_source="$download_url_override"
 else
-  # Determine filetype from the original download URL in metadata
-  case "$download_url" in
-    *.deb) filetype="deb" ;;
-    *.rpm) filetype="rpm" ;;
-    *.dmg) filetype="dmg" ;;
-    *.pkg) filetype="pkg" ;;
-    *) 
-      # Fallback to platform-based detection
-      case "$platform" in
-        "ubuntu"|"debian") filetype="deb" ;;
-        "el"|"centos"|"rhel"|"fedora"|"rocky"|"amazon") filetype="rpm" ;;
-        "mac_os_x") filetype="dmg" ;;
-        *) filetype="deb" ;;
-      esac
-      ;;
-  esac
+  filetype_source="$download_url"
 fi
 
-# Generate filename based on project, version, platform and filetype
-# For dmg files, use the original filename pattern
-if test "$filetype" = "dmg"; then
+case "$filetype_source" in
+  *.deb) filetype="deb" ;;
+  *.rpm) filetype="rpm" ;;
+  *.dmg) filetype="dmg" ;;
+  *.pkg) filetype="pkg" ;;
+  *)
+    # Fallback to platform-based detection
+    case "$platform" in
+      "ubuntu"|"debian") filetype="deb" ;;
+      "el"|"centos"|"rhel"|"fedora"|"rocky"|"amazon") filetype="rpm" ;;
+      "mac_os_x") filetype="dmg" ;;
+      *) filetype="deb" ;;
+    esac
+    ;;
+esac
+
+# GHCR blobs carry no filename or extension, so synthesize the local name.
+if [ "$filetype" = "dmg" ]; then
   filename="${project}-${version}-1.${machine}.${filetype}"
 else
-  if test "$filetype" = "deb"; then
+  if [ "$filetype" = "deb" ]; then
     # Map normalized machine arch to Debian package arch naming
     deb_arch="$machine"
     case "$machine" in
@@ -777,84 +820,86 @@ else
 fi
 
 # use either $tmp_dir, the provided directory (-d) or the provided filename (-f)
-if test "x$cmdline_filename" != "x"; then
+if [ -n "$cmdline_filename" ]; then
   download_filename="$cmdline_filename"
-elif test "x$cmdline_dl_dir" != "x"; then
+elif [ -n "$cmdline_dl_dir" ]; then
   download_filename="$cmdline_dl_dir/$filename"
 else
   download_filename="$tmp_dir/$filename"
 fi
 
 # ensure the parent directory where we download the installer always exists
-download_dir=`dirname $download_filename`
-(umask 077 && mkdir -p $download_dir) || exit 1
+download_dir=`dirname "$download_filename"`
+(umask 077 && mkdir -p "$download_dir") || exit 1
 
-# GHCR blob download function using SHA256
+# Fetch one blob from ghcr.io by SHA256. Returns non-zero when the mirror
+# cannot serve it, so the caller can fall back to the upstream URL.
 do_ghcr_blob_download() {
-  local sha256_hash="$1"
-  local output_file="$2"
-  local project="$3"
-  local registry="ghcr.io"
-  local repo_path="rmoriz/cinc-mirror/${project}"
-  local blob_ref="${registry}/${repo_path}@sha256:${sha256_hash}"
-  
-  echo "Fetching blob from $blob_ref"
-  
-  # Construct the blob URL
-  local blob_url="https://$registry/v2/$repo_path/blobs/sha256:$sha256_hash"
+  ghcr_sha256="$1"
+  ghcr_output_file="$2"
+  ghcr_project="$3"
+  ghcr_registry="ghcr.io"
+  ghcr_repo_path="rmoriz/cinc-mirror/${ghcr_project}"
+  ghcr_blob_url="https://${ghcr_registry}/v2/${ghcr_repo_path}/blobs/sha256:${ghcr_sha256}"
 
-  # Fetch the blob with fresh authentication
-  echo "Downloading to $output_file..."
+  # The mirror path needs curl for the token request and authenticated blob.
+  exists curl || return 1
 
-  # Get fresh authentication token
-  local token=""
-  local auth_url="https://$registry/token?service=$registry&scope=repository:$repo_path:pull"
-  local token_response=$(curl -s "$auth_url" 2>/dev/null || echo "")
-  if test -n "$token_response"; then
-    token=$(echo "$token_response" | grep -o '"token":"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "")
+  echo "Fetching ${ghcr_registry}/${ghcr_repo_path}@sha256:${ghcr_sha256}"
+  echo "Downloading to $ghcr_output_file..."
+
+  ghcr_token=""
+  ghcr_auth_url="https://${ghcr_registry}/token?service=${ghcr_registry}&scope=repository:${ghcr_repo_path}:pull"
+  ghcr_token_response=`curl -fsS "$ghcr_auth_url" 2>/dev/null || true`
+  if [ -n "$ghcr_token_response" ]; then
+    ghcr_token=`printf '%s' "$ghcr_token_response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'`
   fi
 
-  if test -n "$token"; then
-    curl -L -H "Authorization: Bearer $token" -o "$output_file" "$blob_url"
+  if [ -n "$ghcr_token" ]; then
+    curl -fsSL --retry 3 -H "Authorization: Bearer ${ghcr_token}" -o "$ghcr_output_file" "$ghcr_blob_url"
   else
-    curl -L -o "$output_file" "$blob_url"
+    curl -fsSL --retry 3 -o "$ghcr_output_file" "$ghcr_blob_url"
   fi
-  
-  return $?
 }
 
 # check if we have that file locally available and if so verify the checksum
 cached_file_available="false"
 verify_checksum="true"
 
-if test -f $download_filename; then
+if [ -f "$download_filename" ]; then
   echo "$download_filename exists"
-  cached_file_available="true"
-  # Check if existing file matches the expected SHA256
-  if do_checksum "$download_filename" "$sha256"; then
+  if [ -z "$sha256" ]; then
+    echo "Checksum not specified, ignoring existing file"
+    cached_file_available="false"
+    verify_checksum="false"
+  elif do_checksum "$download_filename" "$sha256"; then
     echo "Checksum match, using existing file"
+    cached_file_available="true"
     verify_checksum="false"
   else
-    echo "Checksum mismatch, will re-download"
+    echo "Checksum mismatch, ignoring existing file"
     cached_file_available="false"
+    verify_checksum="true"
   fi
 fi
 
-if test "x$cached_file_available" != "xtrue"; then
-  if test "x$download_url_override" != "x"; then
+if [ "$cached_file_available" != "true" ]; then
+  if [ -n "$download_url_override" ]; then
     # Use traditional download method for URL override
     do_download "$download_url_override" "$download_filename"
   else
-    # Use GHCR blob download with SHA256
-    do_ghcr_blob_download "$sha256" "$download_filename" "$project"
-    if test $? -ne 0; then
-      echo "Error: Failed to download blob from GHCR"
-      unable_to_retrieve_package
+    # Prefer the CINC mirror; fall back to upstream when it cannot serve us.
+    if do_ghcr_blob_download "$sha256" "$download_filename" "$project"; then
+      echo "Downloaded from the CINC mirror."
+    else
+      echo "CINC mirror download failed; falling back to $download_url"
+      rm -f "$download_filename"
+      do_download "$download_url" "$download_filename"
     fi
-    
+
     # For DMG files, the blob contains the actual DMG data
     # but we need to ensure it has the right extension for the installer
-    if test "$filetype" = "dmg" && test "${download_filename##*.}" != "dmg"; then
+    if [ "$filetype" = "dmg" ] && [ "${download_filename##*.}" != "dmg" ]; then
       # Rename the file to have .dmg extension
       dmg_filename="${download_filename%.*}.dmg"
       mv "$download_filename" "$dmg_filename"
@@ -863,8 +908,12 @@ if test "x$cached_file_available" != "xtrue"; then
   fi
 fi
 
-if test "x$verify_checksum" = "xtrue"; then
-  do_checksum "$download_filename" "$sha256" || checksum_mismatch
+if [ "$verify_checksum" = "true" ]; then
+  if [ -z "$sha256" ]; then
+    echo "Skipping checksum verification - no checksum provided"
+  else
+    do_checksum "$download_filename" "$sha256" || checksum_mismatch
+  fi
 fi
 
 ############
@@ -882,7 +931,7 @@ fi
 # $version: The version requested. Used only for warning user if not set.
 ############
 
-if test "x$version" = "x" -a "x$CI" != "xtrue"; then
+if [ -z "$version" ] && [ "$CI" != "true" ]; then
   echo
   echo "WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING"
   echo
@@ -898,7 +947,7 @@ fi
 
 install_file $filetype "$download_filename"
 
-if test "x$tmp_dir" != "x"; then
+if [ -n "$tmp_dir" ]; then
   rm -r "$tmp_dir"
 fi
 
