@@ -11,6 +11,11 @@ Go there for the build, the ledger, the configuration format, the commands and
 the CI setup. This repository only carries the installers, so a package install
 needs nothing but the two commands below.
 
+Please open issues at
+[rmoriz/cinc-mirror/issues](https://github.com/rmoriz/cinc-mirror/issues) rather
+than here — that is where the mirror, the ledger and the installers are actually
+maintained.
+
 ## Trademark / Remarks
 
 This project is neither affiliated nor approved by Progress Chef and/or the Cinc
