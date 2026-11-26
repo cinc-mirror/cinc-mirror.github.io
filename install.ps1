@@ -1,5 +1,5 @@
 new-module -name Installer-Module -scriptblock {
-# CINC mirror installer: fetch packages from ghcr.io/rmoriz/cinc-mirror first
+# Cinc mirror installer: fetch packages from ghcr.io/rmoriz/cinc-mirror first
 # and fall back to the upstream omnitruck download URL when the mirror cannot
 # serve the blob.
 ################ helpers.ps1
@@ -374,6 +374,10 @@ function Get-ProjectMetadata {
   Write-Host "Project details: "
   foreach ($key in $package_metadata.keys) {
     Write-Host "`t$key = $($package_metadata[$key])"
+    # Under the upstream url, show the mirror address the bytes map to.
+    if ($key -eq 'url') {
+      Write-Host "`tmapped to cinc-mirror url: ghcr.io/rmoriz/cinc-mirror/$project@sha256:$($package_metadata['sha256'])"
+    }
   }
   $package_metadata
 }
@@ -514,12 +518,12 @@ function Install-Project {
       $downloaded_from_mirror = $false
       if ([string]::IsNullOrEmpty($download_url_override)) {
         try {
-          Write-Host "Downloading $project from the CINC mirror (ghcr.io/rmoriz/cinc-mirror/$project) to $download_destination."
+          Write-Host "Downloading $project from the Cinc mirror (ghcr.io/rmoriz/cinc-mirror/$project) to $download_destination."
           Get-GhcrBlob -sha256 $sha256 -filepath $download_destination -project $project
           $downloaded_from_mirror = $true
         }
         catch {
-          Write-Host "CINC mirror download failed: $($_.Exception.Message)"
+          Write-Host "Cinc mirror download failed: $($_.Exception.Message)"
           Remove-Item -Path $download_destination -Force -ErrorAction SilentlyContinue
         }
       }

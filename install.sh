@@ -723,7 +723,15 @@ if [ -z "$download_url_override" ]; then
 
   do_download "$metadata_url" "$metadata_filename"
 
-  cat "$metadata_filename"
+  # Print the metadata, and under its upstream `url` line the mirror address the
+  # bytes map to, so the mapping is visible before anything is downloaded.
+  awk -v project="$project" '
+    NR == FNR { if ($1 == "sha256") sha = $2; next }
+    { print }
+    $1 == "url" {
+      printf "mapped to cinc-mirror url: ghcr.io/rmoriz/cinc-mirror/%s@sha256:%s\n", project, sha
+    }
+  ' "$metadata_filename" "$metadata_filename"
 
   echo ""
 
@@ -755,7 +763,7 @@ fi
 
 # fetch_package.sh
 ############
-# This section fetches a package from the CINC mirror at ghcr.io first and
+# This section fetches a package from the Cinc mirror at ghcr.io first and
 # falls back to the upstream $download_url when the mirror cannot serve it.
 #
 # Inputs:
@@ -888,11 +896,11 @@ if [ "$cached_file_available" != "true" ]; then
     # Use traditional download method for URL override
     do_download "$download_url_override" "$download_filename"
   else
-    # Prefer the CINC mirror; fall back to upstream when it cannot serve us.
+    # Prefer the Cinc mirror; fall back to upstream when it cannot serve us.
     if do_ghcr_blob_download "$sha256" "$download_filename" "$project"; then
-      echo "Downloaded from the CINC mirror."
+      echo "Downloaded from the Cinc mirror."
     else
-      echo "CINC mirror download failed; falling back to $download_url"
+      echo "Cinc mirror download failed; falling back to $download_url"
       rm -f "$download_filename"
       do_download "$download_url" "$download_filename"
     fi
